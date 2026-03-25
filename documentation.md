@@ -99,11 +99,12 @@ Responsável pela extração de dados do portal Estratégia MED.
 Classificação semântica via Google Gemini.
 
 - Usa o SDK moderno `google-genai` (não o pacote legado `google-generativeai`).
-- **Modelo:** `gemini-2.5-flash` (Free Tier: limite de 5 requisições/minuto).
+- **Modelo Oficial Selecionado:** `gemini-2.5-flash-lite`.
+- A versão `lite` foi escolhida intencionalmente pois oferece **1.000 requisições por dia** no Free Tier, diferente do `gemini-2.5-flash` padrão que é limitado a 20/dia, o que geraria rápido esgotamento.
 - Envia prompt estruturado pedindo resposta em JSON puro.
 - Parseia a resposta removendo possíveis delimitadores markdown (` ```json `, ` ``` `).
 - Retorna `{"is_edital": true/false, "instituicao": "...", "tipo": "..."}`.
-- Possui fallback para `gemini-1.5-flash` caso o modelo principal falhe.
+- Possui fallback para `gemini-2.5-flash` (caso o lite sofra intermitência).
 
 ### 4.3 `src/notifier.py`
 
@@ -201,27 +202,25 @@ models/gemini-1.5-flash is not found for API version v1beta
 
 **Erro:**
 ```
-429 RESOURCE_EXHAUSTED — Quota exceeded: limit 5, model: gemini-2.5-flash
+429 RESOURCE_EXHAUSTED — Quota exceeded for metric: generativelanguage... limit: 20, model: gemini-2.5-flash
 ```
 
-**Causa:** O Free Tier do `gemini-2.5-flash` permite apenas 5 requisições por minuto. Na primeira execução (com `last_seen.json` vazio), o sistema tentou processar ~15 artigos rapidamente.
+**Causa:** O Free Tier do `gemini-2.5-flash` (a partir de Março/2026) permite apenas 20 requisições **diárias**, além do limite de 5 requisições por minuto. Na primeira execução, com múltiplas notícias acumuladas, as 20 chamadas eram instantaneamente gastas. Os modelos da família 2.0 (como `gemini-2.0-flash`) foram testados, porém foram desativados oficialmente pelo Google para migração compulsória.
 
 **Resolução:**
-- Adicionado `time.sleep(15)` entre cada artigo no loop de `main.py`.
-- Em operação normal, o sistema processa 1–2 artigos novos por execução, ficando dentro do limite.
+- O modelo primário programado em `ai_filter.py` foi migrado para `gemini-2.5-flash-lite`, que garante a cota monstruosa de **1.000 requisições diárias** grátis, mais que o suficiente pro escopo do bot.
 
-### 7.3 Scraper bloqueado pelo site (HTTP 403)
+### 7.3 Scraper bloqueado ou recebendo páginas "capadas" (Geo-Blocking e Error 403)
 
-**Erro:**
-```
-403 Client Error: Forbidden for url: https://med.estrategia.com/portal/noticias/...
-```
+**Erro A:** 403 Forbidden para artigos individuais.
+**Erro B:** O robô varre a Homepage principal, mas as notícias de grande impacto (ex: Revalida INEP) não são lidas, apesar de o usuário vê-las perfeitamente na capa de seu navegador.
 
-**Causa:** O portal Estratégia MED bloqueia requisições sem header `Referer` em páginas de artigo individual.
+**Causa A:** Faltava `Referer` nos requests de artigo.
+**Causa B:** O GitHub Actions roda em servidores nos Estados Unidos. Quando ele acessa a Homepage padrão `https://med.estrategia.com/portal/`, o sistema do site detecta o IP internacional e entrega uma versão "capada" do portal (fallback layout) faltando os super destaques nacionais.
 
 **Resolução:**
-- Adicionado header `Referer: https://med.estrategia.com/portal/?s=editais` nas requisições de artigo.
-- Implementada extração via meta tag `og:description` como estratégia primária (não depende do corpo HTML).
+- `Referer` adicionado a todos os acessos do `scraper.py`.
+- Em vez de buscar na "Home", o "Scraper Multi-Source" mapeia **diretamente as categorias específicas**: `/noticias/`, `/concursos/` e `?s=editais`. Onde o conteúdo é preservado independentemente de geoblocking internacional.
 
 ### 7.4 Parágrafos não extraídos (Could not extract paragraph)
 
@@ -326,7 +325,9 @@ Isso garante que a ação receba exatamente o objeto do card, sem envelope extra
 
 ## 9. Considerações de Produção
 
-- **Rate Limit:** O `gemini-2.5-flash` no Free Tier permite 5 requisições por minuto. O delay de 15 segundos entre artigos garante conformidade. Em operação normal (1–2 artigos novos por execução), o limite não é atingido.
+- **Rate Limit & Quotas:** Nós rodamos o filtro contra o Google Gemini e seu escasso plano Free Tier (Março 2026). Por isso:
+  - Usamos `time.sleep(15)` em processamentos em batch para respeitar os 5 req/min originais.
+  - Usamos especificamente a variante `gemini-2.5-flash-lite` para escapar da armadilha do teto de 20 requests/dia, operando sobre o teto de 1.000 requests/dia.
 - **Fuso Horário:** O agendamento cron no GitHub Actions está em UTC. As conversões para BRT (UTC-3) foram aplicadas.
 - **Deduplicação:** A persistência via `last_seen.json` (commitado no repositório) garante que artigos já processados não sejam reprocessados em execuções futuras.
 - **Custo:** Zero. Todas as tecnologias utilizadas (GitHub Actions Free Tier, Gemini Free Tier, Power Automate no Teams) operam dentro dos limites gratuitos.
