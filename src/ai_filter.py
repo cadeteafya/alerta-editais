@@ -13,8 +13,8 @@ def check_if_edital(title: str, paragraph: str) -> dict:
         return {"is_edital": False}
         
     client = genai.Client(api_key=api_key)
-    # Using exactly gemini-2.5-flash as requested
-    model_id = 'gemini-2.5-flash'
+    # Using gemini-2.5-flash-lite since it has a 1000 requests/day free tier limit (unlike the 20/day of 2.5-flash)
+    model_id = 'gemini-2.5-flash-lite'
     
     prompt = f"""
     Analise o título e o resumo abaixo de um artigo do portal Estratégia MED.
@@ -40,10 +40,10 @@ def check_if_edital(title: str, paragraph: str) -> dict:
         return data
     except Exception as e:
         logger.error(f"Error calling Gemini ({model_id}): {e}")
-        # Secondary attempt with a most common model if the user choice fails
+        # Secondary attempt with a different model if the main choice fails
         try:
              response = client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-2.5-flash',
                 contents=prompt
             )
              text = response.text.replace("```json", "").replace("```", "").strip()
