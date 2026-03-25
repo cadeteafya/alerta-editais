@@ -54,13 +54,18 @@ def fetch_article_paragraph(url: str) -> Optional[str]:
         
         tree = html.fromstring(response.content)
         
-        # Procuramos o primeiro paragrafo que faz sentido (sem tags vazias)
-        # Tenta vários locais onde o texto principal pode estar
+        # Estratégia #1: Metadados da página (Resumo confiável e não-bloqueado)
+        meta_desc = tree.xpath('//meta[@property="og:description" or @name="description"]/@content')
+        if meta_desc and len(meta_desc[0].strip()) > 25:
+            return meta_desc[0].strip()
+            
+        # Estratégia #2: Procuramos o primeiro paragrafo que faz sentido no corpo
         selectors = [
             '//div[contains(@class, "entry-content")]//p',
             '//div[contains(@class, "ast-article-single")]//p',
             '//div[contains(@class, "post-content")]//p',
-            '//article//p'
+            '//article//p',
+            '//body//p'
         ]
         
         for selector in selectors:

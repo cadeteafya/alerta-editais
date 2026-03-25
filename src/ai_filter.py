@@ -13,9 +13,8 @@ def check_if_edital(title: str, paragraph: str) -> dict:
         return {"is_edital": False}
         
     client = genai.Client(api_key=api_key)
-    # Using the latest Flash model as requested by user (Flash Lite 2.0)
-    # gemini-2.0-flash-lite-preview-02-05 is a reliable lite model name
-    model_id = 'gemini-2.0-flash-lite-preview-02-05'
+    # Using exactly gemini-2.5-flash as requested
+    model_id = 'gemini-2.5-flash'
     
     prompt = f"""
     Analise o título e o resumo abaixo de um artigo do portal Estratégia MED.
