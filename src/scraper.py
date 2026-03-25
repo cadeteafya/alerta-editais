@@ -55,18 +55,21 @@ def fetch_article_paragraph(url: str) -> Optional[str]:
         tree = html.fromstring(response.content)
         
         # Procuramos o primeiro paragrafo que faz sentido (sem tags vazias)
-        paragraphs = tree.xpath('//div[contains(@class, "entry-content")]//p')
-        for p in paragraphs:
-            text = p.text_content().strip()
-            # Mais de 50 caracteres para evitar legendas curtas ou botões com tag P
-            if len(text) > 50:
-                return text
-                
-        # Caso fallback do layout normal caso mude
-        for p in tree.xpath('//article//p'):
-            text = p.text_content().strip()
-            if len(text) > 50:
-                return text
+        # Tenta vários locais onde o texto principal pode estar
+        selectors = [
+            '//div[contains(@class, "entry-content")]//p',
+            '//div[contains(@class, "ast-article-single")]//p',
+            '//div[contains(@class, "post-content")]//p',
+            '//article//p'
+        ]
+        
+        for selector in selectors:
+            paragraphs = tree.xpath(selector)
+            for p in paragraphs:
+                text = p.text_content().strip()
+                # Pelo menos 25 caracteres para evitar legendas curtas ou botões
+                if len(text) > 25:
+                    return text
                 
         return None
     except Exception as e:
