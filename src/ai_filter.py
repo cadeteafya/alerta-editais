@@ -13,6 +13,7 @@ def check_if_edital(title: str, paragraph: str) -> dict:
         return {"is_edital": False}
         
     genai.configure(api_key=api_key)
+    # Using the stable model name
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
@@ -22,7 +23,7 @@ def check_if_edital(title: str, paragraph: str) -> dict:
 
     Responda APENAS com JSON válido. Não inclua markdown, código ou outro texto extra.
     Formato esperado:
-    {{"is_edital": true/false, "instituicao": "nome da instituição ou 'N/A'", "tipo": "Novo Edital" ou "Vagas Remanescentes" ou "N/A"}}
+    {{"is_edital": true, "instituicao": "nome da instituição", "tipo": "Novo Edital"}}
     
     Título: {title}
     Resumo: {paragraph}

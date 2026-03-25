@@ -45,7 +45,11 @@ def fetch_articles() -> List[Dict]:
 def fetch_article_paragraph(url: str) -> Optional[str]:
     """Extrai o primeiro parágrafo significativo de um artigo."""
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        # Adiciona Referer para evitar o 403 Forbidden
+        headers = dict(HEADERS)
+        headers["Referer"] = SEARCH_URL
+        
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
         tree = html.fromstring(response.content)
