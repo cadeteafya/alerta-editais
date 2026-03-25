@@ -5,49 +5,63 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://med.estrategia.com/portal/?s=editais"
+# Monitoraremos ambas as páginas porque alguns editais (como o do Revalida) 
+# aparecem na Home mas demoram a ser indexados na busca de editais.
+TARGET_URLS = [
+    "https://med.estrategia.com/portal/",             # Home (pega os destaques como Revalida/Concursos)
+    "https://med.estrategia.com/portal/?s=editais"    # Busca (pega o volume de editais de residência)
+]
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 def fetch_articles() -> List[Dict]:
-    """Coleta a lista de artigos recentes do portal."""
-    try:
-        response = requests.get(SEARCH_URL, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        
-        tree = html.fromstring(response.content)
-        articles = []
-        
-        # O Estratégia Med usa a tag <article>
-        for article in tree.xpath('//article'):
-            title_node = article.xpath('.//h2//a')
-            if not title_node:
-                continue
+    """Coleta a lista de artigos recentes do portal a partir de múltiplas fontes."""
+    articles = []
+    seen_urls = set()
+    
+    for url in TARGET_URLS:
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=15)
+            response.raise_for_status()
             
-            title = title_node[0].text_content().strip()
-            link = title_node[0].get('href')
+            tree = html.fromstring(response.content)
             
-            date_node = article.xpath('.//time')
-            date_str = date_node[0].get('datetime') if date_node else ""
+            # O Estratégia Med usa a tag <article> em ambas as páginas
+            for article in tree.xpath('//article'):
+                title_node = article.xpath('.//h2//a') or article.xpath('.//h3//a')
+                if not title_node:
+                    continue
+                
+                title = title_node[0].text_content().strip()
+                link = title_node[0].get('href')
+                
+                # Evita duplicação se o artigo aparecer nas duas páginas
+                if link in seen_urls:
+                    continue
+                    
+                seen_urls.add(link)
+                
+                date_node = article.xpath('.//time')
+                date_str = date_node[0].get('datetime') if date_node else ""
+                
+                articles.append({
+                    "title": title,
+                    "link": link,
+                    "date": date_str
+                })
+        except Exception as e:
+            logger.error(f"Erro ao buscar os artigos em {url}: {e}")
             
-            articles.append({
-                "title": title,
-                "link": link,
-                "date": date_str
-            })
-            
-        return articles
-    except Exception as e:
-        logger.error(f"Erro ao buscar os artigos: {e}")
-        return []
+    return articles
 
 def fetch_article_paragraph(url: str) -> Optional[str]:
     """Extrai o primeiro parágrafo significativo de um artigo."""
     try:
         # Adiciona Referer para evitar o 403 Forbidden
         headers = dict(HEADERS)
-        headers["Referer"] = SEARCH_URL
+        headers["Referer"] = "https://med.estrategia.com/portal/"
         
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
