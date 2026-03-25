@@ -14,48 +14,54 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str):
     instituicao = edital_info.get("instituicao", "Não informada")
     tipo = edital_info.get("tipo", "Não informado")
     
+    # --- MODELO SIMPLES (TEXTO) ---
     payload = {
-      "type": "message",
-      "attachments": [{
-        "contentType": "application/vnd.microsoft.card.adaptive",
-        "content": {
-          "type": "AdaptiveCard",
-          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-          "version": "1.4",
-          "body": [
-            {
-              "type": "Container",
-              "style": "emphasis",
-              "items": [{
-                "type": "TextBlock",
-                "text": "🚨 NOVO EDITAL DE RESIDÊNCIA MÉDICA",
-                "weight": "Bolder",
-                "size": "Medium",
-                "color": "Attention"
-              }]
-            },
-            {
-              "type": "FactSet",
-              "facts": [
-                { "title": "🏥 Instituição", "value": instituicao },
-                { "title": "📋 Tipo", "value": tipo }
-              ]
-            },
-            {
-              "type": "TextBlock",
-              "text": paragraph,
-              "wrap": True,
-              "spacing": "Medium"
-            }
-          ],
-          "actions": [{
-            "type": "Action.OpenUrl",
-            "title": "📄 Ver Edital Completo",
-            "url": link
-          }]
-        }
-      }]
+        "text": f"🚨 NOVO EDITAL DE RESIDÊNCIA MÉDICA\n\n🏥 Instituição: {instituicao}\n📋 Tipo: {tipo}\n📄 Link: {link}\n\n{paragraph}"
     }
+
+    # --- MODELO ANTIGO (ADAPTIVE CARD) - COMENTADO ---
+    # payload = {
+    #   "type": "message",
+    #   "attachments": [{
+    #     "contentType": "application/vnd.microsoft.card.adaptive",
+    #     "content": {
+    #       "type": "AdaptiveCard",
+    #       "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    #       "version": "1.4",
+    #       "body": [
+    #         {
+    #           "type": "Container",
+    #           "style": "emphasis",
+    #           "items": [{
+    #             "type": "TextBlock",
+    #             "text": "🚨 NOVO EDITAL DE RESIDÊNCIA MÉDICA",
+    #             "weight": "Bolder",
+    #             "size": "Medium",
+    #             "color": "Attention"
+    #           }]
+    #         },
+    #         {
+    #           "type": "FactSet",
+    #           "facts": [
+    #             { "title": "🏥 Instituição", "value": instituicao },
+    #             { "title": "📋 Tipo", "value": tipo }
+    #           ]
+    #         },
+    #         {
+    #           "type": "TextBlock",
+    #           "text": paragraph,
+    #           "wrap": True,
+    #           "spacing": "Medium"
+    #         }
+    #       ],
+    #       "actions": [{
+    #         "type": "Action.OpenUrl",
+    #         "title": "📄 Ver Edital Completo",
+    #         "url": link
+    #       }]
+    #     }
+    #   }]
+    # }
     
     try:
         response = requests.post(webhook_url, json=payload, timeout=10)

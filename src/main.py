@@ -65,6 +65,10 @@ def run():
         else:
             logger.info("Not an edital.")
             
+        # Delay de 15 segundos para evitar erro 429 (Rate Limit de 5 requisições do Gemini Free Tier)
+        import time
+        time.sleep(15)
+            
     save_state(new_seen_links)
     logger.info("Monitor run complete.")
 
