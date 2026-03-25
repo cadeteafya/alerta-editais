@@ -5,11 +5,12 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Monitoraremos ambas as páginas porque alguns editais (como o do Revalida) 
-# aparecem na Home mas demoram a ser indexados na busca de editais.
+# Monitoramos as categorias diretamente porque a Home Page pura (/) 
+# entrega um layout capado para os IPs americanos do GitHub Actions.
 TARGET_URLS = [
-    "https://med.estrategia.com/portal/",             # Home (pega os destaques como Revalida/Concursos)
-    "https://med.estrategia.com/portal/?s=editais"    # Busca (pega o volume de editais de residência)
+    "https://med.estrategia.com/portal/?s=editais",   # Busca Padrão
+    "https://med.estrategia.com/portal/noticias/",    # Notícias (Onde o Revalida INEP foi postado)
+    "https://med.estrategia.com/portal/concursos/"    # Aba de grandes Concursos Médicos
 ]
 
 HEADERS = {
