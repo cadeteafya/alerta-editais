@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # URL da API REST do WordPress para capturar os 30 posts mais recentes do banco de dados,
 # sem sofrer geoblocking de layout ou esconder os banners de destaque.
-API_URL = "https://med.estrategia.com/portal/wp-json/wp/v2/posts?per_page=30"
+API_URL = "https://med.estrategia.com/portal/wp-json/wp/v2/posts?per_page=20"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
