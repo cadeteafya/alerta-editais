@@ -18,12 +18,16 @@ def check_if_edital(title: str, paragraph: str) -> dict:
     
     prompt = f"""
     Analise o título e o resumo abaixo de um artigo do portal Estratégia MED.
-    Determine se é um anúncio de NOVO edital de residência médica
-    (incluindo editais de vagas remanescentes/complementares).
+    Determine se é um anúncio de NOVO edital sobre:
+    1. Residência Médica (incluindo vagas remanescentes/complementares)
+    2. Exames de Revalidação de Diplomas (ex: Revalida INEP)
+    3. Grandes Concursos na Área Médica Institucionais (ex: Ebserh, Forças Armadas)
+
+    Se for QUALQUER UM desses 3 casos, considere como é um edital válido para os médicos (is_edital: true).
 
     Responda APENAS com JSON válido. Não inclua markdown, ```json ou outro texto extra.
     Formato esperado:
-    {{"is_edital": true, "instituicao": "nome da instituição", "tipo": "Novo Edital"}}
+    {{"is_edital": true, "instituicao": "nome da instituição/exame", "tipo": "Novo Edital de Residência ou Revalidação"}}
     
     Título: {title}
     Resumo: {paragraph}
