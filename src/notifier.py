@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def send_teams_notification(edital_info: dict, paragraph: str, link: str):
+def send_teams_notification(edital_info: dict, paragraph: str, link: str, action_links: list = None):
     webhook_url = os.environ.get("TEAMS_WEBHOOK_URL")
     if not webhook_url:
         logger.error("TEAMS_WEBHOOK_URL is not set.")
@@ -12,6 +12,42 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str):
 
     instituicao = edital_info.get("instituicao", "Não informada")
     tipo = edital_info.get("tipo", "Não informado")
+
+    # Construir lista de botões dinâmica
+    actions = []
+    has_banca_link = False
+    
+    if action_links:
+        # Remover duplicatas mantendo a ordem (caso a API do WP retorne o mesmo link do edital e da banca em tags diferentes no mesmo 'name')
+        seen_urls = set()
+        for link_obj in action_links:
+            title = link_obj.get("title", "").strip()
+            url = link_obj.get("url", "").strip()
+            
+            if not title or not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            
+            # Se for edital:
+            if 'EDITAL' in title.upper() or 'RETIFICA' in title.upper():
+                btn_title = f"📄 {title}"
+            else:
+                has_banca_link = True
+                btn_title = f"🌐 {title}"
+                
+            actions.append({
+                "type": "Action.OpenUrl",
+                "title": btn_title,
+                "url": url
+            })
+            
+    # Fallback obrigatório: se não achou link de banca
+    if not has_banca_link:
+        actions.append({
+            "type": "Action.OpenUrl",
+            "title": "🌐 PÁGINA OFICIAL DA BANCA",
+            "url": "https://portal-residencia.vercel.app/tools/editais/index.html"
+        })
 
     payload = {
         "type": "message",
@@ -51,13 +87,7 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str):
                             "spacing": "Medium"
                         }
                     ],
-                    "actions": [
-                        {
-                            "type": "Action.OpenUrl",
-                            "title": "📄 Ver Edital Completo",
-                            "url": link
-                        }
-                    ]
+                    "actions": actions
                 }
             }
         ]
@@ -70,5 +100,4 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str):
         return True
     except Exception as e:
         logger.error(f"Error sending Teams notification: {e}")
-        return False
-        
+        return False        
