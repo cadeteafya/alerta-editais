@@ -3,12 +3,18 @@ import requests
 from lxml import html
 from typing import List, Dict, Optional
 import html as python_html
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-# URL da API REST do WordPress para capturar os 30 posts mais recentes do banco de dados,
-# sem sofrer geoblocking de layout ou esconder os banners de destaque.
-API_URL = "https://med.estrategia.com/portal/wp-json/wp/v2/posts?per_page=20"
+# Base da URL da API REST do WordPress.
+# O parâmetro `after` é calculado dinamicamente para uma janela de 30 dias,
+# bloqueando artigos históricos de 2023/2024 antes mesmo de chegarem ao last_seen.json.
+WP_API_BASE = "https://med.estrategia.com/portal/wp-json/wp/v2/posts"
+
+def _build_api_url() -> str:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{WP_API_BASE}?per_page=20&after={cutoff}"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -24,7 +30,9 @@ def fetch_articles() -> List[Dict]:
     articles = []
     
     try:
-        response = requests.get(API_URL, headers=HEADERS, timeout=15)
+        api_url = _build_api_url()
+        logger.info(f"Fetching articles from API (cutoff: last 30 days): {api_url}")
+        response = requests.get(api_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
         posts = response.json()
         

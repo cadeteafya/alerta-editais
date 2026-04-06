@@ -63,7 +63,7 @@ def run():
             logger.info(f"Confirmed as edital: {edital_info.get('instituicao')}. Sending notification...")
             from scraper import fetch_article_links
             action_links = fetch_article_links(link)
-            send_teams_notification(edital_info, paragraph, link, action_links)
+            send_teams_notification(edital_info, paragraph, link, article["title"], action_links)
         else:
             logger.info("Not an edital.")
             
