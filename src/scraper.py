@@ -89,7 +89,7 @@ def fetch_articles() -> List[Dict]:
                 })
                 
     except Exception as e:
-        logger.error(f"Erro ao buscar os artigos na API {API_URL}: {e}")
+        logger.error(f"Erro ao buscar os artigos na API {WP_API_BASE}: {e}")
             
     return articles
 
