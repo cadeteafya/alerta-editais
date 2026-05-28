@@ -1,102 +1,95 @@
 import logging
 import requests
 from lxml import html
-from typing import List, Dict, Optional
-import html as python_html
-from datetime import datetime, timedelta, timezone
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# Base da URL da API REST do WordPress.
-# O parâmetro `after` é calculado dinamicamente para uma janela de 30 dias,
-# bloqueando artigos históricos de 2023/2024 antes mesmo de chegarem ao last_seen.json.
-WP_API_BASE = "https://med.estrategia.com/portal/wp-json/wp/v2/posts"
-
-def _build_api_url() -> str:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    return f"{WP_API_BASE}?per_page=20&after={cutoff}"
-
+TRACKER_URL = "https://edital-tracker-woad.vercel.app/"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# Cache de parágrafos e botões populado em fetch_articles 
-# para responder instantaneamente a fetch_article... sem novos GETs
-_paragraph_cache: Dict[str, str] = {}
-_links_cache: Dict[str, List[Dict]] = {}
-
 def fetch_articles() -> List[Dict]:
-    """Coleta a lista de artigos recentes via API JSON."""
+    """Coleta os editais estruturados diretamente da página do Edital Tracker."""
     articles = []
     
     try:
-        api_url = _build_api_url()
-        logger.info(f"Fetching articles from API (cutoff: last 30 days): {api_url}")
-        response = requests.get(api_url, headers=HEADERS, timeout=15)
+        logger.info(f"Fetching editais from tracker: {TRACKER_URL}")
+        response = requests.get(TRACKER_URL, headers=HEADERS, timeout=15)
         response.raise_for_status()
-        posts = response.json()
         
-        for post in posts:
-            title_raw = post.get("title", {}).get("rendered", "")
-            # O WP as vezes retorna entidades HTML &amp; ou &#8211;, isso limpa elas.
-            title = python_html.unescape(title_raw).strip()
+        tree = html.fromstring(response.content)
+        cards = tree.xpath("//article")
+        logger.info(f"Found {len(cards)} editais on the page.")
+        
+        for card in cards:
+            # 1. Título
+            title_node = card.xpath(".//h3/text()")
+            title = title_node[0].strip() if title_node else "Edital sem título"
             
-            link = post.get("link", "")
-            date_str = post.get("date", "")
-            content_html = post.get("content", {}).get("rendered", "")
+            # 2. Instituição (Acrônimo no banner)
+            inst_node = card.xpath(".//div[contains(@style, 'linear-gradient')]//p[contains(@class, 'text-white')]/text()")
+            institution = inst_node[0].strip() if inst_node else "Outros"
             
-            # Extrair parágrafo e links dinâmicos do HTML recebido no JSON
-            paragraph = None
-            extracted_links = []
+            # 3. Ano
+            year_node = card.xpath(".//span[contains(@class, 'font-mono') and contains(@class, 'text-white')]/text()")
+            year = year_node[0].strip() if year_node else "2026"
             
-            if content_html:
-                try:
-                    tree = html.fromstring(content_html)
-                    # 1. Parágrafo resumo
-                    for p in tree.xpath('//p'):
-                        text = p.text_content().strip()
-                        if len(text) > 25:
-                            paragraph = text
-                            break
-                            
-                    # 2. Botões Verdes (PDFs)
-                    for a in tree.xpath('//a'):
-                        text = (a.text_content() or "").strip().upper()
-                        href = a.get('href', '')
-                        if ('EDITAL' in text or 'RETIFICAÇÃO' in text) and len(text) < 60 and href:
-                            extracted_links.append({'title': text, 'url': href})
-                            
-                    # 3. Links da Banca (Disclaimer Box)
-                    for p in tree.xpath('//p | //div'):
-                        p_text = (p.text_content() or "").lower()
-                        if 'essencial que o candidato acompanhe' in p_text and 'página oficial' in p_text:
-                            for a in p.xpath('.//a'):
-                                text = (a.text_content() or "").strip().upper()
-                                href = a.get('href', '')
-                                if href and text:
-                                    extracted_links.append({'title': text, 'url': href})
-                            break
-                except Exception as parse_err:
-                    logger.debug(f"Erro ao parsear HTML do conteúdo {link}: {parse_err}")
+            # 4. Tag de Status (ex: "Saiu o edital")
+            tag_node = card.xpath(".//span[contains(@class, 'tracking-wider')]/text()")
+            tag = tag_node[0].strip() if tag_node else ""
             
-            if link:
-                _paragraph_cache[link] = paragraph
-                _links_cache[link] = extracted_links
-                articles.append({
-                    "title": title,
-                    "link": link,
-                    "date": date_str
-                })
+            # 5. Data de Publicação (limpa de comments/prefixos)
+            pub_node = card.xpath(".//header/p/span//text()")
+            pub_date = "".join(pub_node).replace("publicado em", "").strip() if pub_node else "Data não informada"
+            
+            # 6. Próximo Marco
+            next_milestone_node = card.xpath(".//div[contains(@class, 'bg-[var(--surface-muted)]')]//p[contains(@class, 'text-sm') and contains(@class, 'font-medium')]/text()")
+            next_milestone = next_milestone_node[0].strip() if next_milestone_node else ""
+            
+            next_date_node = card.xpath(".//div[contains(@class, 'bg-[var(--surface-muted)]')]//p[contains(@class, 'font-mono')]/text()")
+            next_date = next_date_node[0].strip() if next_date_node else ""
+            
+            next_time_node = card.xpath(".//div[contains(@class, 'bg-[var(--surface-muted)]')]//p[contains(@class, 'text-[11px]')]/text()")
+            next_time = next_time_node[0].strip() if next_time_node else ""
+            
+            # 7. Cronograma Completo
+            schedule_items = []
+            for li in card.xpath(".//ol/li"):
+                stage_node = li.xpath("./span[1]/text()")
+                stage = stage_node[0].strip() if stage_node else ""
                 
+                date_node = li.xpath("./span[2]/text()")
+                date = date_node[0].strip() if date_node else ""
+                
+                if stage and date:
+                    schedule_items.append({"stage": stage, "date": date})
+            
+            # 8. Link Oficial
+            link_node = card.xpath(".//a[contains(text(), 'Site oficial')]/@href")
+            official_link = link_node[0].strip() if link_node else None
+            
+            # Chave única para controle de novidades (Título + Data de Publicação)
+            unique_key = f"{title} | {pub_date}"
+            
+            articles.append({
+                "title": title,
+                "institution": institution,
+                "year": year,
+                "tag": tag,
+                "published_at": pub_date,
+                "next_milestone": {
+                    "stage": next_milestone,
+                    "date": next_date,
+                    "time_left": next_time
+                },
+                "schedule": schedule_items,
+                "official_link": official_link,
+                "link": unique_key
+            })
+            
     except Exception as e:
-        logger.error(f"Erro ao buscar os artigos na API {WP_API_BASE}: {e}")
+        logger.error(f"Erro ao coletar os editais em {TRACKER_URL}: {e}")
             
     return articles
-
-def fetch_article_paragraph(url: str) -> Optional[str]:
-    """Retorna o primeiro parágrafo do artigo a partir do cache já hidratado."""
-    return _paragraph_cache.get(url)
-
-def fetch_article_links(url: str) -> List[Dict]:
-    """Retorna os botões dinâmicos (PDFs e Banca) extraídos do artigo."""
-    return _links_cache.get(url, [])

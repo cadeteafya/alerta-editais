@@ -4,26 +4,36 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_URL = "https://portal-residencia.vercel.app/tools/editais/index.html"
+TRACKER_URL = "https://edital-tracker-woad.vercel.app/"
 
-def send_teams_notification(edital_info: dict, paragraph: str, link: str, article_title: str = "", action_links: list = None):
+def send_teams_notification(edital: dict) -> bool:
+    """Envia uma notificação premium via Microsoft Teams Adaptive Cards com dados estruturados do edital."""
     webhook_url = os.environ.get("TEAMS_WEBHOOK_URL")
     if not webhook_url:
         logger.error("TEAMS_WEBHOOK_URL is not set.")
         return False
 
-    instituicao = edital_info.get("instituicao", "Não informada")
-    tipo = edital_info.get("tipo", "novo_edital")
+    title = edital.get("title", "Edital")
+    institution = edital.get("institution", "Não informada")
+    year = edital.get("year", "2026")
+    tag = edital.get("tag", "")
+    published_at = edital.get("published_at", "Data não informada")
+    next_milestone = edital.get("next_milestone", {})
+    schedule = edital.get("schedule", [])
+    official_link = edital.get("official_link")
 
-    # Cabeçalho dinâmico baseado na classificação da IA
-    if tipo == "atualizacao":
-        card_header = "💡 NOVAS INFORMAÇÕES!"
-        card_color = "Accent"
+    # Determinar a urgência/estilo do cabeçalho
+    tag_upper = tag.upper()
+    is_new_edital = "SAIU" in tag_upper or "NOVO" in tag_upper or "EDITAL" in tag_upper
+    
+    if is_new_edital:
+        card_header = f"🚨 NOVO EDITAL: {institution} {year}"
+        card_color = "Attention" # Vermelho/Laranja de alerta
     else:
-        card_header = "🚨 NOVO EDITAL DE RESIDÊNCIA MÉDICA"
-        card_color = "Attention"
+        card_header = f"🔔 ATUALIZAÇÃO: {institution} {year}"
+        card_color = "Accent" # Azul informativo
 
-    # ---- Corpo do card ----
+    # ---- Cabeçalho e Metadados ----
     body_items = [
         {
             "type": "Container",
@@ -38,66 +48,102 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str, articl
             }]
         },
         {
+            "type": "TextBlock",
+            "text": title,
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": True,
+            "spacing": "Medium"
+        },
+        {
             "type": "FactSet",
             "facts": [
-                {"title": "🏥 Instituição", "value": instituicao}
-            ]
+                {"title": "🏥 Instituição", "value": institution},
+                {"title": "📅 Publicado em", "value": published_at}
+            ],
+            "spacing": "Small"
         }
     ]
 
-    if tipo == "atualizacao":
-        # Atualizações: título do artigo em destaque + parágrafo. Sem botões.
-        if article_title:
-            body_items.append({
-                "type": "TextBlock",
-                "text": article_title,
-                "weight": "Bolder",
-                "wrap": True,
-                "spacing": "Medium"
-            })
+    # ---- Destaque do Próximo Marco ----
+    if next_milestone and next_milestone.get("stage"):
+        stage_name = next_milestone["stage"]
+        stage_date = next_milestone["date"]
+        time_left = next_milestone["time_left"]
+        time_str = f" ({time_left})" if time_left else ""
+        
         body_items.append({
-            "type": "TextBlock",
-            "text": paragraph,
-            "wrap": True,
-            "spacing": "Small"
+            "type": "Container",
+            "style": "accent",
+            "spacing": "Medium",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "🚀 PRÓXIMO MARCO EM DESTAQUE",
+                    "weight": "Bolder",
+                    "size": "Small",
+                    "color": "Accent",
+                    "wrap": True
+                },
+                {
+                    "type": "FactSet",
+                    "facts": [
+                        {"title": stage_name, "value": f"{stage_date}{time_str}"}
+                    ]
+                }
+            ]
         })
-        actions = []
-    else:
-        # Editais novos: apenas parágrafo + 1 botão externo
+
+    # ---- Cronograma de Eventos ----
+    if schedule:
+        schedule_facts = []
+        max_lines = 10
+        
+        if len(schedule) > max_lines:
+            # Exibe os primeiros 9 itens e coloca o aviso de limite na 10ª linha
+            for item in schedule[:max_lines - 1]:
+                schedule_facts.append({
+                    "title": item["stage"],
+                    "value": item["date"]
+                })
+            schedule_facts.append({
+                "title": "⚠️ Cronograma",
+                "value": "Cronograma muito longo. Conferir diretamente no site."
+            })
+        else:
+            for item in schedule:
+                schedule_facts.append({
+                    "title": item["stage"],
+                    "value": item["date"]
+                })
+
         body_items.append({
             "type": "TextBlock",
-            "text": paragraph,
-            "wrap": True,
+            "text": "📅 Cronograma Completo:",
+            "weight": "Bolder",
             "spacing": "Medium"
         })
+        
+        body_items.append({
+            "type": "FactSet",
+            "facts": schedule_facts,
+            "spacing": "Small"
+        })
 
-        # Busca o primeiro link que NÃO seja do med.estrategia e NÃO seja botão de PDF
-        banca_url = None
-        if action_links:
-            seen_urls = set()
-            for link_obj in action_links:
-                title_link = (link_obj.get("title") or "").strip().upper()
-                url = (link_obj.get("url") or "").strip()
-                is_edital_btn = 'EDITAL' in title_link or 'RETIFICA' in title_link
-                is_estrategia = 'med.estrategia' in url or 'estrategiaeducacional' in url
-                if not url or url in seen_urls or is_edital_btn or is_estrategia:
-                    continue
-                seen_urls.add(url)
-                banca_url = url
-                break
-
-        if banca_url:
-            actions = [{
-                "type": "Action.OpenUrl",
-                "title": "🌐 PÁGINA OFICIAL DA BANCA",
-                "url": banca_url
-            }]
-        else:
-            actions = [{
-                "type": "Action.OpenUrl",
-                "title": "📋 NOSSA PÁGINA DE EDITAIS",
-                "url": FALLBACK_URL
-            }]
+    # ---- Botões de Ação ----
+    actions = []
+    if official_link:
+        actions.append({
+            "type": "Action.OpenUrl",
+            "title": "🌐 ACESSAR SITE OFICIAL",
+            "url": official_link
+        })
+        
+    actions.append({
+        "type": "Action.OpenUrl",
+        "title": "📋 VER NO EDITAL TRACKER",
+        "url": TRACKER_URL
+    })
 
     payload = {
         "type": "message",
@@ -118,7 +164,7 @@ def send_teams_notification(edital_info: dict, paragraph: str, link: str, articl
     try:
         response = requests.post(webhook_url, json=payload, timeout=10)
         response.raise_for_status()
-        logger.info(f"Notification sent to Teams for {instituicao} [{tipo}]")
+        logger.info(f"Notification sent to Teams for {institution}")
         return True
     except Exception as e:
         logger.error(f"Error sending Teams notification: {e}")

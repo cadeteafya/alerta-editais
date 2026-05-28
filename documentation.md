@@ -2,7 +2,7 @@
 
 ## 1. Visão Geral
 
-Sistema automatizado de custo zero que monitora o portal [Estratégia MED](https://med.estrategia.com/portal/?s=editais) em busca de novos editais de residência médica e envia notificações em tempo real para o Microsoft Teams via Adaptive Cards.
+Sistema automatizado de custo zero que monitora a página curada do usuário [Edital Tracker](https://edital-tracker-woad.vercel.app/) em busca de novos editais de residência médica e envia notificações estruturadas e premium em tempo real para o Microsoft Teams via Adaptive Cards.
 
 **Stack:**
 
@@ -10,7 +10,6 @@ Sistema automatizado de custo zero que monitora o portal [Estratégia MED](https
 | ---------------- | ------------------------------------------------ |
 | Orquestração     | GitHub Actions (cron schedule + workflow_dispatch) |
 | Scraper          | Python 3.11 (`requests` + `lxml`)                |
-| Filtro Semântico | Google Gemini 2.5 Flash (via `google-genai` SDK) |
 | Notificação      | Microsoft Teams (Power Automate Webhook)         |
 | Persistência     | `data/last_seen.json` (commitado no repositório) |
 
@@ -19,36 +18,35 @@ Sistema automatizado de custo zero que monitora o portal [Estratégia MED](https
 ## 2. Arquitetura
 
 ```
-┌──────────────┐      ┌────────────────┐      ┌──────────────┐      ┌─────────────┐
-│ GitHub Action │─────▶│  scraper.py    │─────▶│ ai_filter.py │─────▶│ notifier.py │
-│  (cron job)  │      │ Extrai artigos │      │ Gemini 2.5   │      │ Webhook POST│
-└──────────────┘      └────────────────┘      └──────────────┘      └──────┬──────┘
-                                                                           │
-                                                                           ▼
-                                                                   ┌──────────────┐
-                                                                   │  Power       │
-                                                                   │  Automate    │
-                                                                   │  (Workflow)  │
-                                                                   └──────┬───────┘
-                                                                          │
-                                                                          ▼
-                                                                   ┌──────────────┐
-                                                                   │ Microsoft    │
-                                                                   │ Teams Chat   │
-                                                                   │ (Adaptive    │
-                                                                   │  Card)       │
-                                                                   └──────────────┘
+┌──────────────┐      ┌────────────────┐      ┌─────────────┐
+│ GitHub Action │─────▶│  scraper.py    │─────▶│ notifier.py │
+│  (cron job)  │      │ Extrai editais │      │ Webhook POST│
+└──────────────┘      └────────────────┘      └──────┬──────┘
+                                                     │
+                                                     ▼
+                                             ┌──────────────┐
+                                             │  Power       │
+                                             │  Automate    │
+                                             │  (Workflow)  │
+                                             └──────┬───────┘
+                                                    │
+                                                    ▼
+                                             ┌──────────────┐
+                                             │ Microsoft    │
+                                             │ Teams Chat   │
+                                             │ (Adaptive    │
+                                             │  Card)       │
+                                             └──────────────┘
 ```
 
 **Fluxo de execução:**
 
 1. O GitHub Actions dispara `src/main.py` conforme o agendamento cron.
 2. `main.py` carrega o estado anterior (`data/last_seen.json`) e chama `scraper.py`.
-3. `scraper.py` faz uma requisição HTTP à página de busca do portal e extrai os artigos via XPath.
-4. Para cada artigo novo (não presente no `last_seen.json`), o scraper busca o resumo da notícia (via meta tag `og:description` ou parágrafos do HTML).
-5. O título e o resumo são enviados ao `ai_filter.py`, que chama a API do Gemini 2.5 Flash para classificar se o conteúdo é um edital de residência médica.
-6. Se confirmado como edital, `notifier.py` envia um POST com Adaptive Card para o Webhook do Power Automate no Teams.
-7. `main.py` salva o novo estado no `last_seen.json` e o GitHub Actions commita o arquivo atualizado de volta no repositório.
+3. `scraper.py` faz uma requisição HTTP ao portal curado e extrai os editais estruturados via XPath.
+4. Para cada edital novo ou atualizado (gerado uma chave única combinando `Título + Data de Publicação`), `main.py` dispara a notificação direta.
+5. O `notifier.py` formata o Adaptive Card com cabeçalho de urgência dinâmico, destaque do próximo marco e o cronograma completo.
+6. `main.py` salva o novo estado no `last_seen.json` (apenas se a notificação foi enviada com sucesso) e o GitHub Actions commita o arquivo atualizado de volta no repositório.
 
 ---
 
@@ -60,11 +58,10 @@ alerta-editais/
 │   └── workflows/
 │       └── monitor.yml          # Configuração do GitHub Actions
 ├── data/
-│   └── last_seen.json           # Estado persistido (links já processados)
+│   └── last_seen.json           # Estado persistido (chaves exclusivas de editais vistos)
 ├── src/
 │   ├── main.py                  # Orquestrador principal
-│   ├── scraper.py               # Web scraper do portal Estratégia MED
-│   ├── ai_filter.py             # Filtro de classificação via Gemini
+│   ├── scraper.py               # Web scraper do portal Edital Tracker
 │   └── notifier.py              # Envio de notificações para o Teams
 ├── requirements.txt             # Dependências Python
 ├── README.md                    # Instruções de configuração
@@ -77,54 +74,44 @@ alerta-editais/
 
 ### 4.1 `src/scraper.py`
 
-Responsável pela extração de dados do portal Estratégia MED.
+Responsável pela extração de dados da página Edital Tracker do Vercel.
 
 **`fetch_articles()`**
-- Faz GET sequencial em múltiplas fontes (atualmente a Home `https://med.estrategia.com/portal/` e a Busca de Editais `https://med.estrategia.com/portal/?s=editais`) com headers de User-Agent simulando navegador.
-  - *Sempre extraímos da Home porque editais grandes como Revalida e CNU aparecem como Destaques lá mas demoram a indexar na busca.*
+- Faz GET na Homepage `https://edital-tracker-woad.vercel.app/` simulando navegador.
 - Parseia o HTML com `lxml` e extrai todos os elementos `<article>`.
-- De cada artigo extrai: título (`<h2><a>` ou `<h3><a>`), link (`href`) e data (`<time datetime>`).
-- Mantém um Set (`seen_urls`) interno durante a execução para resolver duplicações instantâneas (ex: mesmo edital listado na Home e na Busca).
-- Retorna lista de dicionários `[{"title", "link", "date"}]`.
+- De cada edital extrai:
+  - Título (`title`)
+  - Instituição (`institution`)
+  - Ano (`year`)
+  - Tag de Status (`tag`)
+  - Data de Publicação (`published_at`)
+  - Próximo Marco (`next_milestone`) contendo etapa, data e tempo restante.
+  - Cronograma completo (`schedule`) mapeando etapa e data.
+  - Link Oficial da Banca (`official_link`)
+- Mapeia uma chave única em `link` combinando `Title + Publication Date` (ex: `f"{title} | {pub_date}"`) para controle preciso de atualizações e retificações.
+- Retorna lista de dicionários ricos estruturados.
 
-**`fetch_article_paragraph(url)`**
-- Faz GET na URL do artigo individual com header `Referer` apontando para a página de busca (evita bloqueio 403 Forbidden).
-- Estratégia de extração em cascata:
-  1. **Meta tag `og:description`** — resumo embutido no HTML, confiável e nunca bloqueado.
-  2. **XPath em 5 seletores** — `entry-content`, `ast-article-single`, `post-content`, `article`, `body` — em ordem de especificidade.
-- Filtra parágrafos com mais de 25 caracteres para evitar legendas e botões.
-
-### 4.2 `src/ai_filter.py`
-
-Classificação semântica via Google Gemini.
-
-- Usa o SDK moderno `google-genai` (não o pacote legado `google-generativeai`).
-- **Modelo Oficial Selecionado:** `gemini-2.5-flash-lite`.
-- A versão `lite` foi escolhida intencionalmente pois oferece **1.000 requisições por dia** no Free Tier, diferente do `gemini-2.5-flash` padrão que é limitado a 20/dia, o que geraria rápido esgotamento.
-- Envia prompt estruturado pedindo resposta em JSON puro.
-- Parseia a resposta removendo possíveis delimitadores markdown (` ```json `, ` ``` `).
-- Retorna `{"is_edital": true/false, "instituicao": "...", "tipo": "..."}`.
-- Possui fallback para `gemini-2.5-flash` (caso o lite sofra intermitência).
-
-### 4.3 `src/notifier.py`
+### 4.2 `src/notifier.py`
 
 Envio de notificações para o Microsoft Teams.
 
 - Monta um payload JSON contendo um Adaptive Card v1.4 dentro de `attachments`.
-- O card contém:
-  - Header com ícone de alerta e título em destaque.
-  - FactSet com instituição e tipo de edital.
-  - TextBlock com o resumo extraído do artigo.
-  - Botão `Action.OpenUrl` com link direto para o edital completo.
+- O card é dinâmico e premium:
+  - **Banner de Cabeçalho**: Dinâmico com ícone 🏥. Se a Tag for *"Saiu o edital"*, usa o estilo `Attention` (vermelho); caso contrário, usa `Accent` (azul).
+  - **Destaque do Próximo Marco**: Caixa colorida de destaque com a próxima data de ação.
+  - **Tabela de Cronograma (FactSet)**: Exibe a lista ordenada de marcos. Caso o cronograma ultrapasse **10 linhas**, limita em 9 linhas e insere a mensagem: `"⚠️ Cronograma muito longo. Conferir diretamente no site."`.
+  - **Ações**: Botão primário para o link oficial da banca e secundário para o tracker.
 - Envia via POST para a URL do Webhook armazenada no secret `TEAMS_WEBHOOK_URL`.
 
-**Estrutura do payload enviado ao webhook:**
-```json
-{
-  "type": "message",
-  "attachments": [
-    {
-      "contentType": "application/vnd.microsoft.card.adaptive",
+### 4.3 `src/main.py`
+
+Orquestrador que conecta os módulos de forma otimizada e livre de custos de IA.
+
+- Carrega o estado de `data/last_seen.json`.
+- Itera sobre os editais retornados pelo scraper.
+- Ignora editais já notificados utilizando a chave de deduplicação composta.
+- Dispara notificações diretamente via `notifier.py`.
+- Salva o estado atualizado ao final da execução.     "contentType": "application/vnd.microsoft.card.adaptive",
       "content": {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
@@ -325,9 +312,7 @@ Isso garante que a ação receba exatamente o objeto do card, sem envelope extra
 
 ## 9. Considerações de Produção
 
-- **Rate Limit & Quotas:** Nós rodamos o filtro contra o Google Gemini e seu escasso plano Free Tier (Março 2026). Por isso:
-  - Usamos `time.sleep(15)` em processamentos em batch para respeitar os 5 req/min originais.
-  - Usamos especificamente a variante `gemini-2.5-flash-lite` para escapar da armadilha do teto de 20 requests/dia, operando sobre o teto de 1.000 requests/dia.
+- **Alta Performance:** Ao eliminar totalmente a filtragem de IA e chamadas externas desnecessárias, o monitor roda em menos de 5 segundos, sem delays artificiais (`time.sleep`).
 - **Fuso Horário:** O agendamento cron no GitHub Actions está em UTC. As conversões para BRT (UTC-3) foram aplicadas.
-- **Deduplicação:** A persistência via `last_seen.json` (commitado no repositório) garante que artigos já processados não sejam reprocessados em execuções futuras.
-- **Custo:** Zero. Todas as tecnologias utilizadas (GitHub Actions Free Tier, Gemini Free Tier, Power Automate no Teams) operam dentro dos limites gratuitos.
+- **Deduplicação Composta:** A persistência via `last_seen.json` (commitado no repositório) garante que apenas editais novos ou modificações/retificações gerem novos alertas.
+- **Custo e Cota:** Zero. Sem taxas de API, sem chaves do Gemini, 100% gratuito utilizando a infraestrutura nativa do GitHub Actions e do Microsoft Teams.
