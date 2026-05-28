@@ -119,7 +119,7 @@ def send_teams_notification(edital: dict) -> bool:
 
         body_items.append({
             "type": "TextBlock",
-            "text": "📅 Cronograma Completo:",
+            "text": "📅 Cronograma - Principais datas:",
             "weight": "Bolder",
             "spacing": "Medium"
         })
