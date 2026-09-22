@@ -69,10 +69,14 @@ def fetch_articles() -> List[Dict]:
             # 8. Link Oficial
             link_node = card.xpath(".//a[contains(text(), 'Site oficial')]/@href")
             official_link = link_node[0].strip() if link_node else None
-            
+
+            # 9. Taxa de inscrição
+            fee_node = card.xpath(".//span[normalize-space(text())='Taxa']/following-sibling::span[1]/text()")
+            fee = fee_node[0].strip() if fee_node else "Confirmar"
+
             # Chave única para controle de novidades (Título + Data de Publicação)
             unique_key = f"{title} | {pub_date}"
-            
+
             articles.append({
                 "title": title,
                 "institution": institution,
@@ -86,6 +90,7 @@ def fetch_articles() -> List[Dict]:
                 },
                 "schedule": schedule_items,
                 "official_link": official_link,
+                "fee": fee,
                 "link": unique_key
             })
             

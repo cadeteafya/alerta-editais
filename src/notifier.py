@@ -21,6 +21,7 @@ def send_teams_notification(edital: dict) -> bool:
     next_milestone = edital.get("next_milestone", {})
     schedule = edital.get("schedule", [])
     official_link = edital.get("official_link")
+    fee = edital.get("fee", "Confirmar")
 
     # Determinar a urgência/estilo do cabeçalho
     tag_upper = tag.upper()
@@ -59,7 +60,8 @@ def send_teams_notification(edital: dict) -> bool:
             "type": "FactSet",
             "facts": [
                 {"title": "🏥 Instituição", "value": institution},
-                {"title": "📅 Publicado em", "value": published_at}
+                {"title": "📅 Publicado em", "value": published_at},
+                {"title": "💰 Taxa", "value": fee}
             ],
             "spacing": "Small"
         }
