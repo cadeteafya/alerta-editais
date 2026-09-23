@@ -1,318 +1,301 @@
 # Alerta de Editais — Documentação Técnica
 
-## 1. Visão Geral
+> Última atualização: 2026-09-22  
+> Versão: 0.4  
+> Repositório: `cadeteafya/alerta-editais`
 
-Sistema automatizado de custo zero que monitora a página curada do usuário [Edital Tracker](https://edital-tracker-woad.vercel.app/) em busca de novos editais de residência médica e envia notificações estruturadas e premium em tempo real para o Microsoft Teams via Adaptive Cards.
+---
+
+## Índice
+
+1. [Visão geral](#1-visão-geral)
+2. [Arquitetura](#2-arquitetura)
+3. [Estrutura de arquivos](#3-estrutura-de-arquivos)
+4. [Módulos](#4-módulos)
+5. [Cartão Microsoft Teams](#5-cartão-microsoft-teams)
+6. [Deduplicação e estado](#6-deduplicação-e-estado)
+7. [GitHub Actions](#7-github-actions)
+8. [Secrets](#8-secrets)
+9. [Configuração inicial](#9-configuração-inicial)
+10. [Diagnóstico de problemas](#10-diagnóstico-de-problemas)
+
+---
+
+## 1. Visão geral
+
+Sistema automatizado que monitora a página publicada do **Edital Tracker** ([edital-tracker-woad.vercel.app](https://edital-tracker-woad.vercel.app/)) e envia notificações estruturadas ao Microsoft Teams via Adaptive Cards quando um novo edital é detectado.
 
 **Stack:**
 
-| Componente       | Tecnologia                                      |
-| ---------------- | ------------------------------------------------ |
-| Orquestração     | GitHub Actions (cron schedule + workflow_dispatch) |
-| Scraper          | Python 3.11 (`requests` + `lxml`)                |
-| Notificação      | Microsoft Teams (Power Automate Webhook)         |
-| Persistência     | `data/last_seen.json` (commitado no repositório) |
+| Componente | Tecnologia |
+|---|---|
+| Orquestração | GitHub Actions (cron schedule + workflow_dispatch) |
+| Scraper | Python 3.11 (`requests` + `lxml`) |
+| Notificação | Microsoft Teams — Power Automate Webhook |
+| Persistência de estado | `data/last_seen.json` (commitado no repositório) |
 
 ---
 
 ## 2. Arquitetura
 
 ```
-┌──────────────┐      ┌────────────────┐      ┌─────────────┐
-│ GitHub Action │─────▶│  scraper.py    │─────▶│ notifier.py │
-│  (cron job)  │      │ Extrai editais │      │ Webhook POST│
-└──────────────┘      └────────────────┘      └──────┬──────┘
-                                                     │
-                                                     ▼
-                                             ┌──────────────┐
-                                             │  Power       │
-                                             │  Automate    │
-                                             │  (Workflow)  │
-                                             └──────┬───────┘
-                                                    │
-                                                    ▼
-                                             ┌──────────────┐
-                                             │ Microsoft    │
-                                             │ Teams Chat   │
-                                             │ (Adaptive    │
-                                             │  Card)       │
-                                             └──────────────┘
+┌───────────────────┐
+│  GitHub Actions   │  ← cron: mesma janela do edital-tracker
+│  (monitor.yml)    │
+└────────┬──────────┘
+         │ executa
+         ▼
+┌───────────────────┐     GET HTML      ┌─────────────────────────────────┐
+│    src/main.py    │ ─────────────────▶│  edital-tracker-woad.vercel.app │
+│  (orquestrador)   │                   │  (Next.js SSR — fonte de dados) │
+└────────┬──────────┘                   └─────────────────────────────────┘
+         │
+         ├── scraper.py   → extrai editais do HTML via XPath
+         │
+         ├── compara com data/last_seen.json
+         │
+         └── notifier.py  → POST webhook → Power Automate → Teams
+                                │
+                                ▼
+                        ┌───────────────┐
+                        │  Microsoft    │
+                        │  Teams Chat   │
+                        │ (Adaptive     │
+                        │  Card v1.4)   │
+                        └───────────────┘
 ```
-
-**Fluxo de execução:**
-
-1. O GitHub Actions dispara `src/main.py` conforme o agendamento cron.
-2. `main.py` carrega o estado anterior (`data/last_seen.json`) e chama `scraper.py`.
-3. `scraper.py` faz uma requisição HTTP ao portal curado e extrai os editais estruturados via XPath.
-4. Para cada edital novo ou atualizado (gerado uma chave única combinando `Título + Data de Publicação`), `main.py` dispara a notificação direta.
-5. O `notifier.py` formata o Adaptive Card com cabeçalho de urgência dinâmico, destaque do próximo marco e o cronograma completo.
-6. `main.py` salva o novo estado no `last_seen.json` (apenas se a notificação foi enviada com sucesso) e o GitHub Actions commita o arquivo atualizado de volta no repositório.
 
 ---
 
-## 3. Estrutura de Arquivos
+## 3. Estrutura de arquivos
 
 ```
 alerta-editais/
 ├── .github/
 │   └── workflows/
-│       └── monitor.yml          # Configuração do GitHub Actions
+│       └── monitor.yml          # GitHub Actions — cron + dispatch manual
 ├── data/
-│   └── last_seen.json           # Estado persistido (chaves exclusivas de editais vistos)
+│   └── last_seen.json           # Estado: chaves de editais já notificados
 ├── src/
 │   ├── main.py                  # Orquestrador principal
-│   ├── scraper.py               # Web scraper do portal Edital Tracker
-│   └── notifier.py              # Envio de notificações para o Teams
-├── requirements.txt             # Dependências Python
-├── README.md                    # Instruções de configuração
-└── documentation.md             # Este documento
+│   ├── scraper.py               # Web scraper do Edital Tracker
+│   └── notifier.py              # Montagem e envio do Adaptive Card ao Teams
+├── requirements.txt
+├── README.md
+└── documentation.md             # Este arquivo
 ```
 
 ---
 
 ## 4. Módulos
 
-### 4.1 `src/scraper.py`
+### 4.1 `src/scraper.py` — `fetch_articles()`
 
-Responsável pela extração de dados da página Edital Tracker do Vercel.
+Faz GET na homepage do Edital Tracker e extrai todos os `<article>` via XPath (lxml).
 
-**`fetch_articles()`**
-- Faz GET na Homepage `https://edital-tracker-woad.vercel.app/` simulando navegador.
-- Parseia o HTML com `lxml` e extrai todos os elementos `<article>`.
-- De cada edital extrai:
-  - Título (`title`)
-  - Instituição (`institution`)
-  - Ano (`year`)
-  - Tag de Status (`tag`)
-  - Data de Publicação (`published_at`)
-  - Próximo Marco (`next_milestone`) contendo etapa, data e tempo restante.
-  - Cronograma completo (`schedule`) mapeando etapa e data.
-  - Link Oficial da Banca (`official_link`)
-- Mapeia uma chave única em `link` combinando `Title + Publication Date` (ex: `f"{title} | {pub_date}"`) para controle preciso de atualizações e retificações.
-- Retorna lista de dicionários ricos estruturados.
+**Campos extraídos por edital:**
 
-### 4.2 `src/notifier.py`
+| Campo | Descrição | XPath (resumido) |
+|---|---|---|
+| `title` | Título reescrito do edital | `//h3/text()` |
+| `institution` | Nome curto da instituição | Span no div com `linear-gradient` |
+| `year` | Ano do processo | Span com `font-mono text-white` |
+| `tag` | Status ("Saiu o edital", etc.) | Primeiro span com `tracking-wider` |
+| `published_at` | Data de publicação formatada | `//header/p/span//text()` |
+| `next_milestone` | `{stage, date, time_left}` — próximo marco | Div `bg-[var(--surface-muted)]` |
+| `schedule` | Lista `[{stage, date}]` — cronograma completo | `//ol/li` — span[1] e span[2] |
+| `official_link` | URL do site oficial | `//a[contains(text(), 'Site oficial')]/@href` |
+| `fee` | Taxa de inscrição | `//span[normalize-space(text())='Taxa']/following-sibling::span[1]/text()` |
+| `link` | Chave de deduplicação | `f"{title} \| {pub_date}"` |
 
-Envio de notificações para o Microsoft Teams.
+> **`fee`**: se o span "Taxa" não existir no card (card sem taxa), o fallback é a string `"Confirmar"`.
 
-- Monta um payload JSON contendo um Adaptive Card v1.4 dentro de `attachments`.
-- O card é dinâmico e premium:
-  - **Banner de Cabeçalho**: Dinâmico com ícone 🏥. Se a Tag for *"Saiu o edital"*, usa o estilo `Attention` (vermelho); caso contrário, usa `Accent` (azul).
-  - **Destaque do Próximo Marco**: Caixa colorida de destaque com a próxima data de ação.
-  - **Tabela de Cronograma (FactSet)**: Exibe a lista ordenada de marcos. Caso o cronograma ultrapasse **10 linhas**, limita em 9 linhas e insere a mensagem: `"⚠️ Cronograma muito longo. Conferir diretamente no site."`.
-  - **Ações**: Botão primário para o link oficial da banca e secundário para o tracker.
-- Envia via POST para a URL do Webhook armazenada no secret `TEAMS_WEBHOOK_URL`.
-
-### 4.3 `src/main.py`
-
-Orquestrador que conecta os módulos de forma otimizada e livre de custos de IA.
-
-- Carrega o estado de `data/last_seen.json`.
-- Itera sobre os editais retornados pelo scraper.
-- Ignora editais já notificados utilizando a chave de deduplicação composta.
-- Dispara notificações diretamente via `notifier.py`.
-- Salva o estado atualizado ao final da execução.     "contentType": "application/vnd.microsoft.card.adaptive",
-      "content": {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "body": [...],
-        "actions": [...]
-      }
-    }
-  ]
-}
+**Chave de deduplicação:**
+```python
+unique_key = f"{title} | {pub_date}"
 ```
 
-### 4.4 `src/main.py`
+### 4.2 `src/notifier.py` — `send_teams_notification(edital)`
 
-Orquestrador que conecta os módulos.
+Monta e envia um Adaptive Card v1.4 via POST para o webhook do Power Automate.
 
-- Carrega o estado de `data/last_seen.json`.
-- Itera sobre os artigos retornados pelo scraper.
-- Ignora artigos já presentes no estado (deduplicação por URL).
-- Aplica `time.sleep(15)` entre cada artigo para respeitar o rate limit do Gemini Free Tier (5 req/min).
-- Salva o estado atualizado ao final da execução.
+**Lógica do cabeçalho:**
 
-### 4.5 `.github/workflows/monitor.yml`
-
-Configuração do GitHub Actions.
-
-| Parâmetro        | Valor                                                      |
-| ---------------- | ----------------------------------------------------------- |
-| Seg a Sex        | A cada 30 minutos, das 08:00 às 18:00 BRT (11:00–21:00 UTC) |
-| Sáb e Dom        | Uma única execução às 13:00 BRT (16:00 UTC)                 |
-| Execução manual  | Habilitada via `workflow_dispatch`                           |
-| Python           | 3.11 com cache de pip                                       |
-
-Após a execução do monitor, o workflow commita automaticamente o `last_seen.json` atualizado usando a identidade `action@github.com`.
-
----
-
-## 5. Secrets (GitHub)
-
-| Secret             | Descrição                                                    |
-| ------------------ | ------------------------------------------------------------ |
-| `GEMINI_API_KEY`   | Chave da API do Google AI Studio para acesso ao Gemini       |
-| `TEAMS_WEBHOOK_URL`| URL gerada pelo Workflow do Power Automate no Microsoft Teams |
-
-Configurados em: **Settings → Secrets and variables → Actions → Repository secrets**.
-
----
-
-## 6. Dependências
-
-```
-requests>=2.31.0       # HTTP client para scraping e envio de webhooks
-lxml>=4.9.3            # Parser HTML para extração via XPath
-google-genai>=0.3.0    # SDK moderno do Google Gemini (substituto do google-generativeai)
+```python
+is_new_edital = "SAIU" in tag.upper() or "NOVO" in tag.upper() or "EDITAL" in tag.upper()
+card_header = "🚨 NOVO EDITAL: {sigla} {ano}"  # estilo Attention (vermelho)
+# ou
+card_header = "🔔 ATUALIZAÇÃO: {sigla} {ano}"  # estilo Accent (azul)
 ```
 
----
+**Seções do payload:**
 
-## 7. Diagnóstico e Resolução de Problemas Encontrados
+1. Container cabeçalho (Attention/Accent) com título do card.
+2. TextBlock com o título completo do edital.
+3. FactSet com metadados: `🏥 Instituição`, `📅 Publicado em`, `💰 Taxa`.
+4. Container "próximo marco" (accent) — condicional, só se existir.
+5. TextBlock "Cronograma" + FactSet com as datas (limite de 10 linhas; excedente vira aviso).
+6. Actions: botão "🌐 ACESSAR SITE OFICIAL" (condicional) + "📋 VER NO EDITAL TRACKER".
 
-### 7.1 Modelo Gemini não encontrado (HTTP 404)
+**Formato do payload para o Power Automate:**
 
-**Erro:**
-```
-models/gemini-1.5-flash is not found for API version v1beta
-```
-
-**Causa:** O pacote `google-generativeai` (legado) estava descontinuado e os modelos referenciados não eram mais resolvidos pela API v1beta.
-
-**Resolução:**
-- Migração do pacote `google-generativeai` para `google-genai` (SDK moderno).
-- Alteração do model ID para `gemini-2.5-flash`.
-
-### 7.2 Rate Limit do Gemini Free Tier (HTTP 429)
-
-**Erro:**
-```
-429 RESOURCE_EXHAUSTED — Quota exceeded for metric: generativelanguage... limit: 20, model: gemini-2.5-flash
-```
-
-**Causa:** O Free Tier do `gemini-2.5-flash` (a partir de Março/2026) permite apenas 20 requisições **diárias**, além do limite de 5 requisições por minuto. Na primeira execução, com múltiplas notícias acumuladas, as 20 chamadas eram instantaneamente gastas. Os modelos da família 2.0 (como `gemini-2.0-flash`) foram testados, porém foram desativados oficialmente pelo Google para migração compulsória.
-
-**Resolução:**
-- O modelo primário programado em `ai_filter.py` foi migrado para `gemini-2.5-flash-lite`, que garante a cota monstruosa de **1.000 requisições diárias** grátis, mais que o suficiente pro escopo do bot.
-
-### 7.3 Scraper bloqueado ou recebendo páginas "capadas" (Geo-Blocking e Error 403)
-
-**Erro A:** 403 Forbidden para artigos individuais.
-**Erro B:** O robô varre a Homepage principal, mas as notícias de grande impacto (ex: Revalida INEP) não são lidas, apesar de o usuário vê-las perfeitamente na capa de seu navegador.
-
-**Causa A:** Faltava `Referer` nos requests de artigo.
-**Causa B:** O GitHub Actions roda em servidores nos Estados Unidos. Quando ele acessa a Homepage padrão `https://med.estrategia.com/portal/`, o sistema do site detecta o IP internacional e entrega uma versão "capada" do portal (fallback layout) faltando os super destaques nacionais.
-
-**Resolução:**
-- `Referer` adicionado a todos os acessos do `scraper.py`.
-- Em vez de buscar na "Home", o "Scraper Multi-Source" mapeia **diretamente as categorias específicas**: `/noticias/`, `/concursos/` e `?s=editais`. Onde o conteúdo é preservado independentemente de geoblocking internacional.
-
-### 7.4 Parágrafos não extraídos (Could not extract paragraph)
-
-**Causa:** Layouts diferentes entre notícias do portal. Algumas usam classes CSS distintas.
-
-**Resolução:**
-- Implementados 5 seletores XPath em cascata para cobrir variações de layout.
-- Reduzido o filtro de tamanho mínimo de 50 para 25 caracteres.
-
-### 7.5 Permissão negada no push do GitHub Actions (HTTP 403)
-
-**Erro:**
-```
-remote: Write access to repository not granted.
-```
-
-**Resolução:**
-- Alteração em **Settings → Actions → General → Workflow permissions** para "Read and write permissions".
-
-### 7.6 Notificação não entregue no Microsoft Teams
-
-Este foi o problema mais complexo, composto por dois erros distintos que se manifestavam simultaneamente.
-
-#### Problema A — Destino do chat inválido para o Flow Bot
-
-**Erro no Power Automate:**
-```
-LocationLookupFailed — Location lookup failed for thread 19:preview-...
-```
-
-**Causa:**
-O fluxo foi configurado para postar como `Flow bot` em um `Group chat`. O ID do chat retornado (`19:preview-...`) indicava uma referência interna temporária ou de preview que o conector do Microsoft Graph não conseguia resolver para um destino válido de entrega.
-
-Na prática:
-- O chat escolhido no template ficou associado a uma referência interna inválida.
-- O Flow bot não conseguiu mapear o `threadId` para um destino de entrega.
-- O webhook aceitava a requisição (HTTP 200), mas a mensagem morria na etapa final do fluxo.
-
-**Resolução:**
-Alteração da identidade de postagem de **"Flow bot"** para **"Usuário"**. Isso fez a postagem usar a conexão e autorização do próprio usuário no Teams, em vez da identidade do bot. Além disso, o chat foi reconfigurado no fluxo, removendo a dependência do `threadId` problemático.
-
-#### Problema B — Formato do Adaptive Card incompatível com a ação do Power Automate
-
-**Erro no Power Automate:**
-```
-InvalidBotAdaptiveCard — Property 'type' must be 'AdaptiveCard'
-```
-
-**Causa:**
-A ação `Post card in a chat or channel` do Power Automate não espera receber o payload completo do webhook. Ela espera receber **somente o objeto do Adaptive Card** (o conteúdo de `attachments[0].content`), não o envelope `{"type": "message", "attachments": [...]}`.
-
-Na configuração do fluxo, o campo "Cartão Adaptável" estava sendo alimentado com uma expressão inadequada que passava o valor em formato incompatível (em alguns casos usando `string(...)`, que convertia o objeto em texto).
-
-**Resolução:**
-
-No **Python** (`notifier.py`): o payload foi mantido no formato correto com `attachments`, onde `content` contém o objeto do Adaptive Card real:
 ```json
 {
   "type": "message",
   "attachments": [{
     "contentType": "application/vnd.microsoft.card.adaptive",
-    "content": { "type": "AdaptiveCard", ... }
+    "content": {
+      "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+      "type": "AdaptiveCard",
+      "version": "1.4",
+      "body": [...],
+      "actions": [...]
+    }
   }]
 }
 ```
 
-No **Power Automate**: o campo "Cartão Adaptável" foi configurado para apontar para:
+### 4.3 `src/main.py` — `run()`
+
 ```
-first(variables('Attachments'))?['content']
+1. load_state()  →  dict de chaves já notificadas  (data/last_seen.json)
+2. fetch_articles()  →  lista de editais do site
+3. Para cada edital:
+   ├── Se link ∈ seen_links  →  skip
+   └── send_teams_notification(edital)
+       └── Se sucesso: adiciona link ao novo estado
+4. save_state()  →  commita data/last_seen.json
 ```
-Isso garante que a ação receba exatamente o objeto do card, sem envelope extra e sem serialização indevida.
 
 ---
 
-## 8. Configuração Inicial
+## 5. Cartão Microsoft Teams
 
-### 8.1 Google Gemini
-1. Acesse [Google AI Studio](https://aistudio.google.com/).
-2. Gere uma API Key.
-3. Salve no secret `GEMINI_API_KEY` do repositório GitHub.
+Visualização do Adaptive Card enviado ao Teams:
 
-### 8.2 Microsoft Teams (Power Automate Workflow)
+```
+┌─────────────────────────────────────────────────┐
+│  🚨 NOVO EDITAL: {SIGLA} {ANO}                 │  ← fundo vermelho (Attention)
+├─────────────────────────────────────────────────┤
+│  {Título completo do edital}                    │
+├─────────────────────────────────────────────────┤
+│  🏥 Instituição    │  {nome}                    │
+│  📅 Publicado em  │  {data}                    │  ← FactSet
+│  💰 Taxa          │  {R$ 800 ou Confirmar}      │
+├─────────────────────────────────────────────────┤
+│  🚀 PRÓXIMO MARCO EM DESTAQUE                  │  ← Container azul (condicional)
+│  {Etapa}    │  {Data} (em N dias)              │
+├─────────────────────────────────────────────────┤
+│  📅 Cronograma - Principais datas:             │
+│  {Etapa 1}  │  {Data 1}                        │
+│  {Etapa 2}  │  {Data 2}                        │  ← FactSet (máx. 10 linhas)
+│  ...                                            │
+├─────────────────────────────────────────────────┤
+│  [ 🌐 ACESSAR SITE OFICIAL ]                   │
+│  [ 📋 VER NO EDITAL TRACKER ]                  │  ← Botões de ação
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Deduplicação e estado
+
+**Chave única = `"Título do Edital | Data de Publicação"`**
+
+O `data/last_seen.json` armazena um dict `{chave: título}` de todos os editais já notificados:
+
+```json
+{
+  "FAMERP abre seleção para Residência Médica 2027 | 22 de set. de 2026": "FAMERP abre seleção...",
+  "PUC-SP 2027: prazo de inscrições... | 22 de set. de 2026": "PUC-SP 2027: prazo..."
+}
+```
+
+**Regra de re-notificação:**
+
+| O que muda no Edital Tracker | Chave muda? | Novo alerta? |
+|---|---|---|
+| `timeline`, `fee`, `officialUrl`, `updatedAt` | Não | Não |
+| `originalTitle` / `rewrittenTitle` | Sim | Sim |
+| `publishedAt` | Sim | Sim |
+
+---
+
+## 7. GitHub Actions
+
+Arquivo: `.github/workflows/monitor.yml`
+
+| Janela | Frequência |
+|---|---|
+| Seg–Sex, 08h–18h BRT | A cada 30 minutos |
+| Sáb e Dom | Uma vez às 13h BRT |
+| Manual | `workflow_dispatch` |
+
+Ao final da execução, o workflow commita `data/last_seen.json` se ele foi atualizado (novos alertas enviados), usando a identidade `action@github.com`.
+
+**Permissão necessária:** Settings → Actions → General → Workflow permissions → "Read and write permissions".
+
+---
+
+## 8. Secrets
+
+Configurados em: **Settings → Secrets and variables → Actions → Repository secrets**
+
+| Secret | Obrigatório | Descrição |
+|---|---|---|
+| `TEAMS_WEBHOOK_URL` | Sim | URL gerada pelo fluxo Power Automate no Teams |
+
+---
+
+## 9. Configuração inicial
+
+### 9.1 Power Automate (Microsoft Teams Workflow)
+
 1. No Teams, abra o app **Fluxos de trabalho** (Workflows).
-2. Crie um fluxo a partir do modelo "Postar em um chat quando uma solicitação de webhook for recebida".
+2. Crie um fluxo a partir do modelo **"Postar em um chat quando uma solicitação de webhook for recebida"**.
 3. Configure:
-   - **Postar como:** Usuário (não Flow bot).
-   - **Chat:** Selecione o chat de destino desejado.
-4. No editor avançado do fluxo, configure o campo "Cartão Adaptável" com a expressão: `first(variables('Attachments'))?['content']`.
-5. Copie a URL gerada do webhook e salve no secret `TEAMS_WEBHOOK_URL` do repositório GitHub.
+   - **Postar como:** Usuário (não "Flow bot" — o bot causa erro `LocationLookupFailed`).
+   - **Chat:** selecione o chat de destino.
+4. No editor avançado, configure o campo "Cartão Adaptável" com a expressão:
+   ```
+   first(variables('Attachments'))?['content']
+   ```
+   Isso extrai o objeto do Adaptive Card do envelope `attachments[0].content`.
+5. Copie a URL do webhook e salve no secret `TEAMS_WEBHOOK_URL`.
 
-### 8.3 GitHub Actions
-1. Vá em **Settings → Actions → General → Workflow permissions**.
-2. Selecione **"Read and write permissions"**.
-3. Salve.
+### 9.2 GitHub Actions
 
-### 8.4 Teste
-1. Vá na aba **Actions** do repositório.
-2. Selecione o workflow "Monitor de Editais de Residência Médica".
-3. Clique em **"Run workflow"** para executar manualmente e validar o fluxo completo.
+1. Adicione o secret `TEAMS_WEBHOOK_URL` ao repositório.
+2. Vá em **Settings → Actions → General → Workflow permissions** → "Read and write permissions".
+3. Para testar, vá em **Actions → Monitor de Editais → Run workflow**.
 
 ---
 
-## 9. Considerações de Produção
+## 10. Diagnóstico de problemas
 
-- **Alta Performance:** Ao eliminar totalmente a filtragem de IA e chamadas externas desnecessárias, o monitor roda em menos de 5 segundos, sem delays artificiais (`time.sleep`).
-- **Fuso Horário:** O agendamento cron no GitHub Actions está em UTC. As conversões para BRT (UTC-3) foram aplicadas.
-- **Deduplicação Composta:** A persistência via `last_seen.json` (commitado no repositório) garante que apenas editais novos ou modificações/retificações gerem novos alertas.
-- **Custo e Cota:** Zero. Sem taxas de API, sem chaves do Gemini, 100% gratuito utilizando a infraestrutura nativa do GitHub Actions e do Microsoft Teams.
+### Notificação não chega ao Teams
+
+**Causa A:** URL do webhook expirada ou inválida.  
+**Resolução:** regenerar o fluxo no Power Automate e atualizar o secret.
+
+**Causa B:** Fluxo configurado para postar como "Flow bot".  
+**Resolução:** alterar para "Usuário" (ver seção 9.1). O Flow bot causa `LocationLookupFailed`.
+
+**Causa C:** Campo "Cartão Adaptável" recebe o envelope completo ao invés do `content`.  
+**Resolução:** usar a expressão `first(variables('Attachments'))?['content']` no Power Automate.
+
+### Taxa aparece como "Confirmar" no cartão
+
+**Causa:** o card do Edital Tracker não continha o campo taxa no HTML quando o alerta foi gerado (edital capturado antes da adição do campo `fee`).
+
+**Situação atual:** o campo `fee` é renderizado pelo Next.js no HTML do Edital Tracker. O `scraper.py` usa o XPath `//span[normalize-space(text())='Taxa']/following-sibling::span[1]/text()` para extraí-lo. Se o card mostrar "Confirmar", significa que o JSON do `edital-tracker` também não tem a taxa (o scraper Python não a encontrou no artigo original).
+
+### Push rejeitado pelo GitHub Actions (403)
+
+**Causa:** permissão de workflow insuficiente.  
+**Resolução:** Settings → Actions → General → Workflow permissions → "Read and write permissions".
+
+### Edital já notificado sendo re-notificado
+
+**Causa:** o título ou a data de publicação mudou no Edital Tracker (nova chave de dedup).  
+**Isso é comportamento esperado** para retificações formais que alteram título ou data.
