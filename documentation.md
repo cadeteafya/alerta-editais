@@ -288,7 +288,7 @@ Configurados em: **Settings → Secrets and variables → Actions → Repository
 
 **Causa:** o card do Edital Tracker não continha o campo taxa no HTML quando o alerta foi gerado (edital capturado antes da adição do campo `fee`).
 
-**Situação atual:** o campo `fee` é renderizado pelo Next.js no HTML do Edital Tracker. O `scraper.py` usa o XPath `//span[normalize-space(text())='Taxa']/following-sibling::span[1]/text()` para extraí-lo. Se o card mostrar "Confirmar", significa que o JSON do `edital-tracker` também não tem a taxa (o scraper Python não a encontrou no artigo original).
+**Situação atual:** o campo `fee` é renderizado pelo Next.js no HTML do Edital Tracker. O `scraper.py` usa o XPath `//span[normalize-space(text())='Taxa']/following-sibling::span[1]/text()` para extraí-lo. Se o card mostrar "Confirmar", significa que o JSON do `edital-tracker` também não tem a taxa: não estava no artigo original **nem** pôde ser lida com segurança do PDF do edital (fallback `pdf_fee.py`, desde v0.6 do edital-tracker). O fallback deixa "Confirmar" de propósito quando há mais de um edital na página ou mais de um valor de taxa (sócio/não sócio, por programa etc.).
 
 ### Push rejeitado pelo GitHub Actions (403)
 
