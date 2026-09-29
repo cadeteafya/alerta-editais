@@ -1,7 +1,7 @@
 # Alerta de Editais — Documentação Técnica
 
-> Última atualização: 2026-09-22  
-> Versão: 0.4  
+> Última atualização: 2026-09-29  
+> Versão: 0.5  
 > Repositório: `cadeteafya/alerta-editais`
 
 ---
@@ -91,7 +91,14 @@ alerta-editais/
 
 ### 4.1 `src/scraper.py` — `fetch_articles()`
 
-Faz GET na homepage do Edital Tracker e extrai todos os `<article>` via XPath (lxml).
+Lê as **páginas 1 a 3** do Edital Tracker (`/`, `/?page=2`, `/?page=3` — 9 cards por página, mais recentes primeiro) e extrai os `<article>` via XPath (lxml).
+
+| Página | Cards considerados |
+|---|---|
+| 1 | Todos (comportamento original) |
+| 2–3 | Só os com selo "Saiu o edital" (capturados há ≤2 dias) |
+
+**Por quê:** com mais de 9 editais novos entre duas execuções, o excedente cairia na página 2 e nunca seria notificado. A restrição nas páginas 2–3 impede que registros antigos (nunca vistos na página 1) disparem. Cards repetidos na mesma execução são ignorados (página inexistente devolve a última página).
 
 **Campos extraídos por edital:**
 
