@@ -10,20 +10,49 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# O site mostra 9 cards por página (mais recentes primeiro). Lemos as primeiras
+# páginas para não perder editais quando mais de 9 entram entre duas execuções.
+MAX_PAGES = 3
+
+
 def fetch_articles() -> List[Dict]:
-    """Coleta os editais estruturados diretamente da página do Edital Tracker."""
+    """Coleta os editais estruturados das primeiras páginas do Edital Tracker.
+
+    Página 1: todos os cards (comportamento original).
+    Páginas 2+: apenas cards com o selo "Saiu o edital" (capturados há ≤2 dias),
+    para que registros antigos nunca notificados não disparem alertas.
+    """
     articles = []
-    
+    seen_keys = set()
+
+    for page in range(1, MAX_PAGES + 1):
+        url = TRACKER_URL if page == 1 else f"{TRACKER_URL}?page={page}"
+        try:
+            logger.info(f"Fetching editais from tracker: {url}")
+            response = requests.get(url, headers=HEADERS, timeout=15)
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"Erro ao coletar os editais em {url}: {e}")
+            break
+
+        page_articles = _parse_cards(html.fromstring(response.content))
+        logger.info(f"Found {len(page_articles)} editais on page {page}.")
+        for article in page_articles:
+            if article["link"] in seen_keys:
+                continue  # página inexistente devolve a última página: evita duplicar
+            if page > 1 and "saiu" not in article["tag"].lower():
+                continue
+            seen_keys.add(article["link"])
+            articles.append(article)
+
+    return articles
+
+
+def _parse_cards(tree) -> List[Dict]:
+    """Extrai os campos de cada card (<article>) de uma página do Edital Tracker."""
+    articles = []
     try:
-        logger.info(f"Fetching editais from tracker: {TRACKER_URL}")
-        response = requests.get(TRACKER_URL, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        
-        tree = html.fromstring(response.content)
-        cards = tree.xpath("//article")
-        logger.info(f"Found {len(cards)} editais on the page.")
-        
-        for card in cards:
+        for card in tree.xpath("//article"):
             # 1. Título
             title_node = card.xpath(".//h3/text()")
             title = title_node[0].strip() if title_node else "Edital sem título"
@@ -95,6 +124,6 @@ def fetch_articles() -> List[Dict]:
             })
             
     except Exception as e:
-        logger.error(f"Erro ao coletar os editais em {TRACKER_URL}: {e}")
-            
+        logger.error(f"Erro ao extrair os cards do Edital Tracker: {e}")
+
     return articles
